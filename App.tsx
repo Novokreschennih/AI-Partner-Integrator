@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import { generateRecommendations } from './services/geminiService';
 import { Header } from './components/Header';
 import { ApiKeyInput } from './components/ApiKeyInput';
@@ -7,34 +7,19 @@ import { BotScriptInput } from './components/BotScriptInput';
 import { PartnerProductInput } from './components/PartnerProductInput';
 import { ResultDisplay } from './components/ResultDisplay';
 import { GenerateButton } from './components/GenerateButton';
+import { useLocalStorage } from './hooks/useLocalStorage';
+import { botScriptExample, partnerProductsExample } from './lib/examples';
+import { TemperatureSlider } from './components/TemperatureSlider';
 
 const App: React.FC = () => {
-  const [apiKey, setApiKey] = useState<string>('');
-  const [botScript, setBotScript] = useState<string>('');
-  const [partnerProducts, setPartnerProducts] = useState<string>('');
+  const [apiKey, setApiKey] = useLocalStorage<string>('gemini_api_key', '');
+  const [botScript, setBotScript] = useLocalStorage<string>('bot_script', '');
+  const [partnerProducts, setPartnerProducts] = useLocalStorage<string>('partner_products', '');
+  const [temperature, setTemperature] = useLocalStorage<number>('generation_temperature', 0.5);
+  
   const [generatedJson, setGeneratedJson] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const storedApiKey = localStorage.getItem('gemini_api_key');
-    if (storedApiKey) {
-      setApiKey(storedApiKey);
-    }
-  }, []);
-
-  const handleApiKeyChange = (key: string) => {
-    setApiKey(key);
-    localStorage.setItem('gemini_api_key', key);
-  };
-
-  const handleBotFileLoad = (content: string) => {
-    setBotScript(content);
-  };
-  
-  const handlePartnerProductsFileLoad = (content: string) => {
-    setPartnerProducts(content);
-  };
 
   const handleGenerate = useCallback(async () => {
     if (!apiKey || !botScript || !partnerProducts) {
@@ -50,15 +35,22 @@ const App: React.FC = () => {
     setGeneratedJson('');
 
     try {
-      const result = await generateRecommendations(botScript, partnerProducts, apiKey);
-      setGeneratedJson(result);
+      const result = await generateRecommendations(botScript, partnerProducts, apiKey, temperature);
+      // Validate if the result is a valid JSON before setting the state
+      try {
+        JSON.parse(result);
+        setGeneratedJson(result);
+      } catch (parseError) {
+        console.error("JSON Parsing Error:", parseError);
+        throw new Error("AI вернул некорректный формат данных (не JSON). Попробуйте изменить запрос или повторить попытку.");
+      }
     } catch (e: any) {
       console.error(e);
       setError(e.message || 'Произошла ошибка при генерации рекомендаций. Пожалуйста, проверьте консоль для получения подробной информации.');
     } finally {
       setIsLoading(false);
     }
-  }, [botScript, partnerProducts, apiKey]);
+  }, [botScript, partnerProducts, apiKey, temperature]);
 
   return (
     <div className="min-h-screen bg-slate-900 text-slate-200 font-sans p-4 sm:p-6 lg:p-8">
@@ -66,19 +58,25 @@ const App: React.FC = () => {
         <Header />
 
         <main className="mt-8 space-y-8">
-          <ApiKeyInput apiKey={apiKey} onApiKeyChange={handleApiKeyChange} />
+          <ApiKeyInput apiKey={apiKey} onApiKeyChange={setApiKey} />
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
             <BotScriptInput
               value={botScript}
               onChange={setBotScript}
-              onFileLoad={handleBotFileLoad}
+              onFileLoad={setBotScript}
+              onExampleLoad={() => setBotScript(botScriptExample)}
             />
             <PartnerProductInput
               value={partnerProducts}
               onChange={setPartnerProducts}
-              onFileLoad={handlePartnerProductsFileLoad}
+              onFileLoad={setPartnerProducts}
+              onExampleLoad={() => setPartnerProducts(partnerProductsExample)}
             />
+          </div>
+          
+          <div className="max-w-lg mx-auto">
+            <TemperatureSlider value={temperature} onChange={setTemperature} />
           </div>
 
           <div className="text-center">

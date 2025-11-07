@@ -4,7 +4,8 @@ import { GoogleGenAI } from "@google/genai";
 export async function generateRecommendations(
   botScript: string,
   partnerProducts: string,
-  apiKey: string
+  apiKey: string,
+  temperature: number,
 ): Promise<string> {
   if (!apiKey) {
     throw new Error("API ключ не предоставлен.");
@@ -43,6 +44,9 @@ ${partnerProducts}
     const response = await ai.models.generateContent({
         model: model,
         contents: prompt,
+        config: {
+            temperature: temperature
+        }
     });
     return response.text;
   } catch (error: any) {

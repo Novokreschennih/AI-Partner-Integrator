@@ -2,11 +2,13 @@
 import React, { useRef } from 'react';
 import { ProductIcon } from './icons/ProductIcon';
 import { FileUploadIcon } from './icons/FileUploadIcon';
+import { WandIcon } from './icons/WandIcon';
 
 interface PartnerProductInputProps {
   value: string;
   onChange: (value: string) => void;
   onFileLoad: (content: string) => void;
+  onExampleLoad: () => void;
 }
 
 const placeholderText = `Опишите каждый продукт и укажите вашу партнёрскую ссылку. 
@@ -20,7 +22,7 @@ const placeholderText = `Опишите каждый продукт и укаж�
 Описание: AI-редактор для быстрой ретуши.
 Ссылка: https://фотосервис.ру/подписка?ref=123`;
 
-export const PartnerProductInput: React.FC<PartnerProductInputProps> = ({ value, onChange, onFileLoad }) => {
+export const PartnerProductInput: React.FC<PartnerProductInputProps> = ({ value, onChange, onFileLoad, onExampleLoad }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -63,13 +65,22 @@ export const PartnerProductInput: React.FC<PartnerProductInputProps> = ({ value,
         className="hidden"
         accept=".json,.txt,.md"
       />
-      <button
-        onClick={handleUploadClick}
-        className="mt-4 w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium py-2 px-4 rounded-lg transition-colors duration-200"
-      >
-        <FileUploadIcon className="w-5 h-5" />
-        Загрузить файл
-      </button>
+      <div className="mt-4 grid grid-cols-2 gap-4">
+        <button
+          onClick={handleUploadClick}
+          className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+        >
+          <FileUploadIcon className="w-5 h-5" />
+          Загрузить файл
+        </button>
+         <button
+          onClick={onExampleLoad}
+          className="w-full flex items-center justify-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-200 font-medium py-2 px-4 rounded-lg transition-colors duration-200"
+        >
+          <WandIcon className="w-5 h-5" />
+          Загрузить пример
+        </button>
+      </div>
     </div>
   );
 };

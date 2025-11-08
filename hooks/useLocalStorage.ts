@@ -1,5 +1,6 @@
-
-import { useState, useEffect } from 'react';
+// FIX: The `React` namespace is used in the function's return type signature (React.Dispatch),
+// but `React` itself was not imported. Importing it makes the namespace available.
+import React, { useState, useEffect } from 'react';
 
 function getValueFromStorage<T>(key: string, initialValue: T): T {
   // Проверяем, доступен ли window (для SSR)

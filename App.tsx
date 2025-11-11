@@ -1,6 +1,6 @@
 
 import React, { useState, useCallback, useEffect } from 'react';
-import { generateRecommendations, GenerationResult } from './services/geminiService';
+import { GenerationResult, generateRecommendationsStream, regenerateSingleMessageStream } from './services/geminiService';
 import { Header } from './components/Header';
 import { BotScriptInput } from './components/BotScriptInput';
 import { PartnerProductInput } from './components/PartnerProductInput';
@@ -19,6 +19,9 @@ import { LogOutIcon } from './components/icons/LogOutIcon';
 import { LegalDrawer } from './components/LegalDrawer';
 import { SettingsIcon } from './components/icons/SettingsIcon';
 import { ShieldIcon } from './components/icons/ShieldIcon';
+import { ResultSkeleton } from './components/ResultSkeleton';
+import { HistoryDrawer, HistoryItem } from './components/HistoryDrawer';
+import { HistoryIcon } from './components/icons/HistoryIcon';
 
 const App: React.FC = () => {
   const [apiKey, setApiKey] = useLocalStorage<string>('gemini_api_key', '');
@@ -30,6 +33,7 @@ const App: React.FC = () => {
   const [n8nJson, setN8nJson] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [regeneratingMessage, setRegeneratingMessage] = useState<{ blockId: string; messageIndex: number } | null>(null);
 
   const [isAuthenticated, setIsAuthenticated] = useLocalStorage<boolean>('isAuthenticated', false);
   const [hasSeenLanding, setHasSeenLanding] = useLocalStorage<boolean>('has_seen_landing_v1', false);
@@ -37,6 +41,9 @@ const App: React.FC = () => {
   const [showApiKeyModal, setShowApiKeyModal] = useState<boolean>(false);
   const [isHelpOpen, setIsHelpOpen] = useState<boolean>(false);
   const [isLegalOpen, setIsLegalOpen] = useState<boolean>(false);
+  const [isHistoryOpen, setIsHistoryOpen] = useState<boolean>(false);
+
+  const [history, setHistory] = useLocalStorage<HistoryItem[]>('generation_history_v1', []);
   
   useEffect(() => {
     // If user is authenticated but has no API key, prompt them.
@@ -55,8 +62,6 @@ const App: React.FC = () => {
 
   const handleLogout = () => {
     setIsAuthenticated(false);
-    // User will be redirected to PinValidation page on next render
-    // because hasSeenLanding is still true.
   };
 
   const handleContinueFromModal = () => {
@@ -67,6 +72,45 @@ const App: React.FC = () => {
       }
     }
   };
+
+  const processGenerationStream = useCallback(async () => {
+    let accumulatedText = '';
+    try {
+        const stream = generateRecommendationsStream(botScript, partnerProducts, apiKey, temperature);
+        for await (const chunk of stream) {
+            accumulatedText += chunk;
+        }
+        
+        const responseText = accumulatedText.trim();
+        const jsonStartIndex = responseText.indexOf('{');
+        const jsonEndIndex = responseText.lastIndexOf('}');
+
+        if (jsonStartIndex === -1 || jsonEndIndex === -1 || jsonEndIndex < jsonStartIndex) {
+            throw new Error("Не удалось найти JSON-объект в ответе от API.");
+        }
+
+        const jsonString = responseText.substring(jsonStartIndex, jsonEndIndex + 1);
+        const parsedResult: GenerationResult = JSON.parse(jsonString);
+        setGenerationResult(parsedResult);
+
+        if (parsedResult?.customizedScript) {
+            const n8nWorkflowJson = convertToN8nJson(parsedResult.customizedScript);
+            setN8nJson(n8nWorkflowJson);
+        }
+        
+        const newHistoryItem: HistoryItem = {
+            id: new Date().toISOString(),
+            botScript,
+            partnerProducts,
+            temperature,
+            result: parsedResult
+        };
+        setHistory(prev => [newHistoryItem, ...prev.slice(0, 19)]);
+    } catch (e: any) {
+        console.error("Generation Error:", e, "Accumulated response:", accumulatedText);
+        setError(`Произошла ошибка при обработке ответа. Возможно, он имеет неверный формат. Полный ответ: ${accumulatedText}`);
+    }
+  }, [botScript, partnerProducts, apiKey, temperature, setHistory]);
 
   const handleGenerate = useCallback(async () => {
     if (!apiKey) {
@@ -87,47 +131,81 @@ const App: React.FC = () => {
     setGenerationResult(null);
     setN8nJson('');
 
-    try {
-      const resultString = await generateRecommendations(botScript, partnerProducts, apiKey, temperature);
-      let parsedResult: GenerationResult;
+    await processGenerationStream();
+
+    setIsLoading(false);
+  }, [apiKey, botScript, partnerProducts, processGenerationStream]);
+  
+  const handleRegenerateAll = useCallback(async () => {
+    if (isLoading) return;
+    setError(null);
+    setIsLoading(true);
+    setN8nJson('');
+    await processGenerationStream();
+    setIsLoading(false);
+  }, [isLoading, processGenerationStream]);
+
+  const handleRegenerateMessage = useCallback(async (blockId: string, messageIndex: number) => {
+      if (!generationResult?.customizedScript || regeneratingMessage) return;
+
+      const blockToUpdate = generationResult.customizedScript.find(b => b.id === blockId);
+      if (!blockToUpdate) return;
+      const messageToRegenerate = blockToUpdate.messages[messageIndex];
+      if (!messageToRegenerate) return;
+
+      setRegeneratingMessage({ blockId, messageIndex });
+      setError(null);
+
       try {
-        let jsonString = resultString.trim();
-        if (jsonString.startsWith('```json')) {
-            jsonString = jsonString.slice(7);
-            if (jsonString.endsWith('```')) {
-                jsonString = jsonString.slice(0, -3);
-            }
-            jsonString = jsonString.trim();
-        }
+          let newText = '';
+          const stream = regenerateSingleMessageStream(
+              botScript,
+              partnerProducts,
+              generationResult.customizedScript,
+              messageToRegenerate.text,
+              apiKey,
+              temperature
+          );
+          for await (const chunk of stream) {
+              newText += chunk;
+          }
 
-        const firstBrace = jsonString.indexOf('{');
-        const lastBrace = jsonString.lastIndexOf('}');
-        if (firstBrace === -1 || lastBrace === -1) {
-            throw new Error("No JSON object found in the AI response.");
-        }
-        const finalJsonString = jsonString.substring(firstBrace, lastBrace + 1);
-        parsedResult = JSON.parse(finalJsonString);
-        setGenerationResult(parsedResult);
+          setGenerationResult(prevResult => {
+              if (!prevResult) return null;
+              // Deep clone to ensure immutability
+              const newCustomizedScript = structuredClone(prevResult.customizedScript);
+              const targetBlock = newCustomizedScript.find(b => b.id === blockId);
+              if (targetBlock && targetBlock.messages[messageIndex]) {
+                  targetBlock.messages[messageIndex].text = newText.trim();
+              }
+              
+              if (newCustomizedScript) {
+                 setN8nJson(convertToN8nJson(newCustomizedScript));
+              }
 
-      } catch (parseError) {
-        console.error("JSON Parsing Error:", parseError, "Raw response:", resultString);
-        throw new Error("AI вернул некорректный формат данных (не JSON). Попробуйте изменить запрос или повторить попытку.");
+              return { ...prevResult, customizedScript: newCustomizedScript };
+          });
+      } catch (e: any) {
+          console.error("Message regeneration error:", e);
+          setError("Не удалось перегенерировать сообщение.");
+      } finally {
+          setRegeneratingMessage(null);
       }
+  }, [generationResult, botScript, partnerProducts, apiKey, temperature, regeneratingMessage]);
 
-      if (parsedResult && Array.isArray(parsedResult.customizedScript)) {
-        const n8nWorkflowJson = convertToN8nJson(parsedResult.customizedScript);
-        setN8nJson(n8nWorkflowJson);
+  const loadFromHistory = (item: HistoryItem) => {
+      setBotScript(item.botScript);
+      setPartnerProducts(item.partnerProducts);
+      setTemperature(item.temperature);
+      setGenerationResult(item.result);
+      if (item.result?.customizedScript) {
+        setN8nJson(convertToN8nJson(item.result.customizedScript));
       } else {
-         console.warn("AI result does not contain a valid script, cannot convert to n8n workflow.");
+        setN8nJson('');
       }
-
-    } catch (e: any) {
-      console.error(e);
-      setError(e.message || 'Произошла ошибка при генерации рекомендаций. Пожалуйста, проверьте консоль для получения подробной информации.');
-    } finally {
-      setIsLoading(false);
-    }
-  }, [botScript, partnerProducts, apiKey, temperature]);
+      setIsHistoryOpen(false);
+      setError(null);
+  };
 
   if (!isAuthenticated) {
     if (!hasSeenLanding) {
@@ -136,7 +214,8 @@ const App: React.FC = () => {
     return <PinValidation onSuccess={handleLoginSuccess} />;
   }
 
-  // Render main application if authenticated
+  const isOverlayActive = showApiKeyModal || isHelpOpen || isLegalOpen || isHistoryOpen;
+
   return (
     <>
       <ApiKeyModal 
@@ -147,8 +226,9 @@ const App: React.FC = () => {
       />
       <HelpDrawer isOpen={isHelpOpen} onClose={() => setIsHelpOpen(false)} />
       <LegalDrawer isOpen={isLegalOpen} onClose={() => setIsLegalOpen(false)} />
+      <HistoryDrawer isOpen={isHistoryOpen} onClose={() => setIsHistoryOpen(false)} history={history} onSelect={loadFromHistory} onClear={() => setHistory([])}/>
       
-      <div className={`min-h-screen bg-slate-900 text-slate-200 font-sans p-4 sm:p-6 lg:p-8 transition-filter duration-300 ${showApiKeyModal || isHelpOpen || isLegalOpen ? 'blur-sm' : ''} ${showApiKeyModal ? 'pointer-events-none' : ''}`}>
+      <div className={`min-h-screen bg-slate-900 text-slate-200 font-sans p-4 sm:p-6 lg:p-8 transition-filter duration-300 ${isOverlayActive ? 'blur-sm' : ''} ${showApiKeyModal ? 'pointer-events-none' : ''}`}>
         <div className="max-w-7xl mx-auto relative">
           <Header />
           <button
@@ -190,14 +270,24 @@ const App: React.FC = () => {
             </div>
 
             {error && (
-              <div className="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-lg text-center" role="alert">
+              <div className="bg-red-900/50 border border-red-700 text-red-300 px-4 py-3 rounded-lg text-left" role="alert">
                 <strong className="font-bold">Ошибка: </strong>
-                <span className="block sm:inline">{error}</span>
+                <span className="block mt-1 whitespace-pre-wrap break-words">{error}</span>
               </div>
             )}
 
+            {isLoading && !generationResult && <ResultSkeleton />}
+
             {generationResult && (
-              <ResultDisplay result={generationResult} n8nJsonString={n8nJson} />
+              <ResultDisplay 
+                result={generationResult} 
+                n8nJsonString={n8nJson} 
+                apiKey={apiKey}
+                onRegenerateAll={handleRegenerateAll}
+                onRegenerateMessage={handleRegenerateMessage}
+                isRegeneratingAll={isLoading}
+                regeneratingMessage={regeneratingMessage}
+              />
             )}
           </main>
         </div>
@@ -205,6 +295,13 @@ const App: React.FC = () => {
       
       {!showApiKeyModal && (
          <div className="fixed bottom-6 right-6 flex flex-col items-center gap-4 z-40">
+            <button
+                onClick={() => setIsHistoryOpen(true)}
+                className="bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full p-3 shadow-lg transition-all duration-300 transform hover:scale-110 focus:outline-none focus:ring-4 focus:ring-slate-500 focus:ring-opacity-50"
+                aria-label="История генераций"
+              >
+                <HistoryIcon className="w-6 h-6" />
+            </button>
             <button
                 onClick={() => setIsLegalOpen(true)}
                 className="bg-slate-700 hover:bg-slate-600 text-slate-300 rounded-full p-3 shadow-lg transition-all duration-300 transform hover:scale-110 focus:outline-none focus:ring-4 focus:ring-slate-500 focus:ring-opacity-50"

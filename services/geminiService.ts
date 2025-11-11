@@ -1,5 +1,5 @@
 
-import { GoogleGenAI } from "@google/genai";
+import { GoogleGenAI, Modality } from "@google/genai";
 import { ScriptBlock } from '../lib/n8nConverter';
 
 export interface GenerationResult {
@@ -13,21 +13,7 @@ export interface GenerationResult {
   };
 }
 
-
-export async function generateRecommendations(
-  botScript: string,
-  partnerProducts: string,
-  apiKey: string,
-  temperature: number,
-): Promise<string> {
-  if (!apiKey) {
-    throw new Error("API ключ не предоставлен.");
-  }
-
-  const ai = new GoogleGenAI({ apiKey });
-  const model = 'gemini-2.5-flash';
-
-  const prompt = `
+const promptTemplate = `
 Твоя роль: AI-ассистент, специализирующийся на бренд-интеграциях в чат-ботах.
 
 **ЗАДАЧА:**
@@ -40,12 +26,12 @@ export async function generateRecommendations(
 
 1.  **Сценарий чат-бота для анализа стиля:**
     \`\`\`
-    ${botScript}
+    {{BOD_SCRIPT}}
     \`\`\`
 
 2.  **Информация о партнёрских продуктах:**
     \`\`\`
-    ${partnerProducts}
+    {{PARTNER_PRODUCTS}}
     \`\`\`
 
 **ИНСТРУКЦИИ ПО ГЕНЕРАЦИИ:**
@@ -67,7 +53,7 @@ export async function generateRecommendations(
 Верни ТОЛЬКО валидный JSON-объект. Никаких объяснений, комментариев или \`\`\`json\`\`\` обёрток.
 **КРИТИЧЕСКИ ВАЖНО:** Всегда экранируй двойные кавычки (") внутри строковых значений JSON с помощью обратного слэша (\\"). Например: \`"text": "Привет, \\"бро\\"!"\`.
 
-**СТРУКТУРА JSON-ОБЪЕкта:**
+**СТРУКТТУРА JSON-ОБЪЕкта:**
 \`\`\`json
 {
   "botProfile": {
@@ -105,19 +91,75 @@ export async function generateRecommendations(
 \`\`\`
 `;
 
+const regenerateMessagePromptTemplate = `
+Твоя роль: Редактор и копирайтер для чат-ботов.
+
+**ЗАДАЧА:**
+Тебе нужно переписать ОДНО конкретное сообщение в уже существующем диалоге. Твоя цель — предложить альтернативную формулировку, сохраняя при этом первоначальный смысл, контекст диалога и, самое главное, уникальный стиль общения бота.
+
+**КОНТЕКСТ:**
+
+1.  **Оригинальный стиль бота (определён на основе этого скрипта):**
+    \`\`\`
+    {{BOT_SCRIPT}}
+    \`\`\`
+
+2.  **Рекомендуемые продукты (для понимания цели):**
+    \`\`\`
+    {{PARTNER_PRODUCTS}}
+    \`\`\`
+
+3.  **Полный сгенерированный диалог (для понимания места сообщения в беседе):**
+    \`\`\`json
+    {{CURRENT_SCRIPT}}
+    \`\`\`
+
+4.  **КОНКРЕТНОЕ СООБЩЕНИЕ, КОТОРОЕ НУЖНО ПЕРЕПИСАТЬ:**
+    \`\`\`
+    {{MESSAGE_TO_REGENERATE}}
+    \`\`\`
+
+**ИНСТРУКЦИИ:**
+1.  Проанализируй тон голоса из **Оригинального стиля бота**.
+2.  Пойми контекст из **Полного сгенерированного диалога**.
+3.  Перепиши **Конкретное сообщение**, чтобы оно звучало по-новому, но оставалось верным стилю и смыслу.
+4.  Не меняй никакие другие части диалога.
+
+**ФОРМАТ ВЫВОДА:**
+Верни ТОЛЬКО новый текст для этого сообщения. Никаких JSON, никаких объяснений, только одна строка с новым текстом.
+`;
+
+
+export async function* generateRecommendationsStream(
+  botScript: string,
+  partnerProducts: string,
+  apiKey: string,
+  temperature: number,
+): AsyncGenerator<string, void, undefined> {
+  if (!apiKey) {
+    throw new Error("API ключ не предоставлен.");
+  }
+  const ai = new GoogleGenAI({ apiKey });
+  const model = 'gemini-2.5-flash';
+  
+  const prompt = promptTemplate
+    .replace('{{BOD_SCRIPT}}', botScript)
+    .replace('{{PARTNER_PRODUCTS}}', partnerProducts);
+
   try {
-    const response = await ai.models.generateContent({
+    const response = await ai.models.generateContentStream({
         model: model,
         contents: prompt,
         config: {
-            temperature: temperature
+            temperature: temperature,
+            responseMimeType: "application/json",
         }
     });
-    const text = response.text;
-    if (!text) {
-      throw new Error("AI returned an empty response.");
+
+    for await (const chunk of response) {
+      yield chunk.text;
     }
-    return text;
+
   } catch (error: any) {
     console.error("Error calling Gemini API:", error);
     if (error.message && error.message.includes('API key not valid')) {
@@ -125,4 +167,78 @@ export async function generateRecommendations(
     }
     throw new Error("Не удалось получить ответ от Gemini API. Проверьте правильность ключа и подключение к сети.");
   }
+}
+
+
+export async function* regenerateSingleMessageStream(
+  botScript: string,
+  partnerProducts: string,
+  currentScript: ScriptBlock[],
+  messageToRegenerate: string,
+  apiKey: string,
+  temperature: number,
+): AsyncGenerator<string, void, undefined> {
+    if (!apiKey) {
+        throw new Error("API ключ не предоставлен.");
+    }
+    const ai = new GoogleGenAI({ apiKey });
+    const model = 'gemini-2.5-flash';
+
+    const prompt = regenerateMessagePromptTemplate
+        .replace('{{BOT_SCRIPT}}', botScript)
+        .replace('{{PARTNER_PRODUCTS}}', partnerProducts)
+        .replace('{{CURRENT_SCRIPT}}', JSON.stringify(currentScript, null, 2))
+        .replace('{{MESSAGE_TO_REGENERATE}}', messageToRegenerate);
+
+    try {
+        const response = await ai.models.generateContentStream({
+            model: model,
+            contents: prompt,
+            config: {
+                temperature: temperature,
+            }
+        });
+
+        for await (const chunk of response) {
+            yield chunk.text;
+        }
+
+    } catch (error: any) {
+        console.error("Error calling Gemini API for message regeneration:", error);
+        throw new Error("Не удалось перегенерировать сообщение.");
+    }
+}
+
+
+export async function generateVisualizationImage(
+  prompt: string,
+  apiKey: string
+): Promise<string> {
+   if (!apiKey) {
+      throw new Error("API ключ не предоставлен для генерации изображения.");
+   }
+   
+   const ai = new GoogleGenAI({ apiKey });
+   
+   try {
+     const response = await ai.models.generateContent({
+        model: 'gemini-2.5-flash-image',
+        contents: {
+          parts: [{ text: prompt }],
+        },
+        config: {
+            responseModalities: [Modality.IMAGE],
+        },
+      });
+
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData) {
+          return part.inlineData.data; // return base64 string
+        }
+      }
+      throw new Error("Изображение не было найдено в ответе API.");
+   } catch (error: any) {
+     console.error("Error generating image with Gemini:", error);
+     throw new Error("Не удалось сгенерировать изображение. Пожалуйста, проверьте консоль.");
+   }
 }

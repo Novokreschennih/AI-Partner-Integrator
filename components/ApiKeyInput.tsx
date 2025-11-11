@@ -1,4 +1,3 @@
-
 import React, { useState } from 'react';
 import { ApiKeyIcon } from './icons/ApiKeyIcon';
 import { EyeIcon } from './icons/EyeIcon';
@@ -22,7 +21,15 @@ export const ApiKeyInput: React.FC<ApiKeyInputProps> = ({ apiKey, onApiKeyChange
         <h2 className="text-xl font-semibold text-white">Ваш Gemini API Ключ</h2>
       </div>
       <p className="text-slate-400 mb-4 text-sm">
-        Ваш ключ хранится локально в вашем браузере и используется только для отправки запросов к Gemini API.
+        Ваш ключ хранится локально в вашем браузере и используется только для отправки запросов к Gemini API.{' '}
+        <a 
+          href="https://aistudio.google.com/app/apikey" 
+          target="_blank" 
+          rel="noopener noreferrer" 
+          className="text-cyan-400 hover:text-cyan-300 underline"
+        >
+          Получить ключ можно в Google AI Studio.
+        </a>
       </p>
       <div className="relative">
         <input

@@ -25,20 +25,6 @@ const parseTelegramMarkdown = (text: string): React.ReactNode => {
     });
 };
 
-// Helper to convert a single message to a string for copying
-const messageToString = (message: SimpleMessage): string => {
-    let text = message.text;
-    if (message.buttons) {
-        text += '\n';
-        message.buttons.forEach(row => {
-            text += row.map(btn => `[${btn.text}]`).join(' ');
-            text += '\n';
-        });
-    }
-    return text.trim();
-};
-
-
 // Helper to convert script to a plain text string (for Markdown and TXT)
 const scriptToPlainText = (script: ScriptBlock[]): string => {
     return script.map(block => {
@@ -100,17 +86,16 @@ type ExportFormat = 'n8n' | 'simple' | 'markdown' | 'txt';
 export const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, n8nJsonString }) => {
     const [selectedFormat, setSelectedFormat] = useState<ExportFormat>('n8n');
     const [isScriptCopied, copyScript] = useCopyToClipboard();
-    const [copiedMessageIndex, setCopiedMessageIndex] = useState<number | null>(null);
-
+    const [copiedInfo, setCopiedInfo] = useState<{ type: 'message' | 'button', messageIndex: number, buttonIndex?: number } | null>(null);
 
     const allMessages = useMemo(() => result.customizedScript.flatMap(block => block.messages), [result.customizedScript]);
 
-    const handleMessageCopy = (message: SimpleMessage, index: number) => {
-        const textToCopy = messageToString(message);
+    const handleCopy = (textToCopy: string, messageIndex: number, type: 'message' | 'button', buttonIndex?: number) => {
+        if (!textToCopy) return;
         navigator.clipboard.writeText(textToCopy).then(() => {
-            setCopiedMessageIndex(index);
+            setCopiedInfo({ type, messageIndex, buttonIndex });
             setTimeout(() => {
-                setCopiedMessageIndex(null);
+                setCopiedInfo(null);
             }, 2000);
         });
     };
@@ -194,23 +179,39 @@ export const ResultDisplay: React.FC<ResultDisplayProps> = ({ result, n8nJsonStr
                      <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4 max-h-[400px] overflow-y-auto mb-4">
                         <div className="space-y-4">
                             {allMessages.map((message, index) => (
-                                <div key={index} className="flex flex-col items-start group relative" onClick={() => handleMessageCopy(message, index)}>
-                                    <div className="bg-cyan-600 text-white rounded-lg rounded-bl-sm px-4 py-2 max-w-lg cursor-pointer transition-all duration-200 group-hover:bg-cyan-500">
+                                <div key={index} className="flex flex-col items-start group">
+                                    <div 
+                                        className="bg-cyan-600 text-white rounded-lg rounded-bl-sm px-4 py-2 max-w-lg cursor-pointer transition-all duration-200 hover:bg-cyan-500 relative"
+                                        onClick={() => handleCopy(message.text, index, 'message')}
+                                    >
                                         <p>{parseTelegramMarkdown(message.text)}</p>
+                                        {copiedInfo?.type === 'message' && copiedInfo.messageIndex === index && (
+                                            <div className="absolute inset-0 bg-black/60 rounded-lg flex items-center justify-center text-white font-semibold text-sm animate-fade-in-out backdrop-blur-sm">
+                                                <CheckIcon className="w-5 h-5 mr-2 text-green-400" />
+                                                Скопировано!
+                                            </div>
+                                        )}
                                     </div>
                                     {message.buttons && (
-                                        <div className="mt-2 flex flex-wrap gap-2 cursor-pointer">
+                                        <div className="mt-2 flex flex-wrap gap-2">
                                             {message.buttons.flat().map((button, btnIndex) => (
-                                                <div key={btnIndex} className="bg-slate-700 text-slate-200 text-sm rounded-full px-3 py-1.5 shadow-sm">
+                                                <div 
+                                                    key={btnIndex}
+                                                    className="bg-slate-700 text-slate-200 text-sm rounded-full px-3 py-1.5 shadow-sm cursor-pointer hover:bg-slate-600 transition-colors duration-200 relative"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        handleCopy(button.text, index, 'button', btnIndex);
+                                                    }}
+                                                >
                                                     {button.text}
+                                                    {copiedInfo?.type === 'button' && copiedInfo.messageIndex === index && copiedInfo.buttonIndex === btnIndex && (
+                                                       <div className="absolute inset-0 bg-black/60 rounded-full flex items-center justify-center text-white font-semibold text-xs animate-fade-in-out backdrop-blur-sm">
+                                                            <CheckIcon className="w-4 h-4 mr-1 text-green-400" />
+                                                            Скопировано!
+                                                        </div>
+                                                     )}
                                                 </div>
                                             ))}
-                                        </div>
-                                    )}
-                                    {copiedMessageIndex === index && (
-                                        <div className="absolute inset-0 bg-black/60 rounded-lg flex items-center justify-center text-white font-semibold text-sm animate-fade-in-out backdrop-blur-sm">
-                                            <CheckIcon className="w-5 h-5 mr-2 text-green-400" />
-                                            Скопировано!
                                         </div>
                                     )}
                                 </div>
